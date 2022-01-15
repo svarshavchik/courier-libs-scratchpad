@@ -15,6 +15,13 @@
 #include	"config.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#if 0
+}
+#endif
+#endif
+
 extern void error(const char *), error2(const char *, int);
 extern void error3(const char *, int, const char *, const char *, int);
 
@@ -75,10 +82,6 @@ extern void error3(const char *, int, const char *, const char *, int);
 
 /* Automake dribble */
 
-#ifndef	HAVE_STRDUP
-extern char *strdup(const char *);
-#endif
-
 extern void cleanup();
 
 extern void http_redirect_argu(const char *, unsigned long);
@@ -103,5 +106,12 @@ extern char *get_imageurl();
 #define SEARCHRESFILENAME "searchres"
 
 char *trim_spaces(const char *s);
+
+#ifdef __cplusplus
+#if 0
+{
+#endif
+}
+#endif
 
 #endif

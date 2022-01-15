@@ -248,7 +248,6 @@ FILE	*fp=fopen("conftestval", "w");
 dnl Checks for library functions.
 AC_FUNC_STRFTIME
 AC_CHECK_FUNCS(crypt utime utimes setreuid setlocale)
-AC_REPLACE_FUNCS(strdup)
 
 AC_CACHE_CHECK([for crypt() prototype],sqwebmail_cv_NEED_CRYPT_PROTOTYPE,
 
@@ -399,7 +398,7 @@ AC_ARG_ENABLE(bannerprog,
 		 ])
 
 
-CFLAGS="$CFLAGS -I.. -I$srcdir/.. -I../.. -I$srcdir/../.."
+CPPFLAGS="$CPPFLAGS -I.. -I$srcdir/.. -I../.. -I$srcdir/../.."
 
 AC_ARG_WITH(maxargsize,
 	[  --with-maxargsize=nbytes       Limit maximum size of CGI args])
