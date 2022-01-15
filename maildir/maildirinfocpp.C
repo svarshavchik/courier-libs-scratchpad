@@ -18,34 +18,24 @@ struct imap_find_shared {
 	struct maildir_info *info;
 	const char *path;
 	size_t path_l;
-	char *homedir;
-	char *maildir;
+
+	std::string homedir;
+	std::string maildir;
 };
 
 static int imap_find_cb(struct maildir_newshared_enum_cb *cb)
 {
-	struct imap_find_shared *ifs=(struct imap_find_shared *)cb->cb_arg;
+	imap_find_shared *ifs=
+		reinterpret_cast<imap_find_shared *>(cb->cb_arg);
 
 	if (cb->homedir)
 	{
-		ifs->homedir=strdup(cb->homedir);
-		if (!ifs->homedir)
-			return -1;
+		ifs->homedir=cb->homedir;
 	}
 
 	if (cb->maildir)
 	{
-		ifs->maildir=strdup(cb->maildir);
-
-		if (!ifs->maildir)
-		{
-			if (cb->homedir)
-			{
-				free(ifs->homedir);
-				ifs->homedir=NULL;
-			}
-			return -1;
-		}
+		ifs->maildir=cb->maildir;
 	}
 
 	return 0;
@@ -56,9 +46,10 @@ extern "C" int maildir_info_imap_find(struct maildir_info *info,
 				      const char *myId)
 {
 	const char *p;
-	struct imap_find_shared ifs;
+	imap_find_shared ifs;
 	const char *indexfile;
-	char *indexfile_cpy;
+	std::string indexfile_cpy;
+
 	struct maildir_shindex_cache *curcache;
 	const char *subhierarchy;
 
@@ -169,11 +160,7 @@ extern "C" int maildir_info_imap_find(struct maildir_info *info,
 	if (!info->owner)
 		return -1;
 
-	ifs.homedir=NULL;
-	ifs.maildir=NULL;
-
 	indexfile=NULL;
-	indexfile_cpy=NULL;
 	curcache=NULL;
 	subhierarchy=NULL;
 
@@ -185,12 +172,6 @@ extern "C" int maildir_info_imap_find(struct maildir_info *info,
 		curcache=maildir_shared_cache_read(curcache, indexfile,
 						   subhierarchy);
 
-		if (indexfile_cpy)
-		{
-			free(indexfile_cpy);
-			indexfile_cpy=NULL;
-		}
-
 		if (!curcache)
 			break;
 
@@ -201,14 +182,8 @@ extern "C" int maildir_info_imap_find(struct maildir_info *info,
 		else
 			ifs.path_l=strlen(ifs.path);
 
-
-		if (ifs.homedir)
-			free(ifs.homedir);
-		if (ifs.maildir)
-			free(ifs.maildir);
-
-		ifs.homedir=NULL;
-		ifs.maildir=NULL;
+		ifs.homedir.clear();
+		ifs.maildir.clear();
 
 		for (i=0; i < curcache->nrecords; i++)
 		{
@@ -248,13 +223,13 @@ extern "C" int maildir_info_imap_find(struct maildir_info *info,
 			break;
 		}
 
-		if (!ifs.homedir && !ifs.maildir)
+		if (ifs.homedir.empty() && ifs.maildir.empty())
 			break;
 
-		if (!ifs.homedir)
+		if (ifs.homedir.empty())
 		{
-			indexfile=indexfile_cpy=ifs.maildir;
-			ifs.maildir=NULL;
+			indexfile_cpy=ifs.maildir;
+			indexfile=indexfile_cpy.c_str();
 			subhierarchy=curcache->records[i].name;
 
 			ifs.path += ifs.path_l;
@@ -263,11 +238,8 @@ extern "C" int maildir_info_imap_find(struct maildir_info *info,
 			continue;
 		}
 
-		info->homedir=maildir_location(ifs.homedir,
-					     ifs.maildir);
-
-		free(ifs.homedir);
-		free(ifs.maildir);
+		info->homedir=maildir_location(ifs.homedir.c_str(),
+					       ifs.maildir.c_str());
 
 		free(info->owner);
 
@@ -362,37 +334,25 @@ extern "C" int maildir_info_imap_find(struct maildir_info *info,
 		return 0;
 	}
 
-	if (indexfile_cpy)
-		free(indexfile_cpy);
-	if (ifs.homedir)
-	{
-		free(ifs.homedir);
-		ifs.homedir=NULL;
-	}
-
-	if (ifs.maildir)
-	{
-		free(ifs.maildir);
-		ifs.maildir=NULL;
-	}
 	return 0;
 }
 
 struct get_existing_folder_info {
 	char **fn;
-	char *pathname;
+
+	std::string pathname;
 };
 
 static void get_existing_callback(const char *f, void *vp)
 {
 	char **fn;
 
-	struct get_existing_folder_info *gefi=
-		(struct get_existing_folder_info *)vp;
+	get_existing_folder_info *gefi=
+		reinterpret_cast<get_existing_folder_info *>(vp);
 	size_t i;
 	size_t j;
 
-	if (gefi->pathname)
+	if (!gefi->pathname.empty())
 		return;
 
 	fn=maildir_smapfn_fromutf8(f);
@@ -419,16 +379,7 @@ static void get_existing_callback(const char *f, void *vp)
 				break;
 		}
 
-	gefi->pathname=(char *)malloc(j+1);
-
-	if (!gefi->pathname)
-	{
-		perror("malloc");
-		return;
-	}
-
-	memcpy(gefi->pathname, f, j);
-	gefi->pathname[j]=0;
+	gefi->pathname=std::string{f, f+j};
 }
 /*
 ** Maildir folders are named in IMAP-compatible modified-UTF8 encoding,
@@ -509,17 +460,16 @@ static char *smap_path(const char *homedir,
 	}
 
 	gefi.fn=words;
-	gefi.pathname=NULL;
 
 	maildir_list(homedir ? homedir:".",
 		     &get_existing_callback, &gefi);
 
-	if (gefi.pathname)
+	if (!gefi.pathname.empty())
 	{
 		free(n);
 		free(p);
 
-		return gefi.pathname;
+		return strdup(gefi.pathname.c_str());
 	}
 
 	free(p);
@@ -536,7 +486,7 @@ int maildir_info_smap_find(struct maildir_info *info, char **folder,
 	const char *subhierarchy;
 	struct imap_find_shared ifs;
 	int rc, eof;
-	char *indexfile_cpy=NULL;
+	std::string indexfile_cpy;
 
 	info->homedir=NULL;
 	info->maildir=NULL;
@@ -587,8 +537,6 @@ int maildir_info_smap_find(struct maildir_info *info, char **folder,
 	curcache=NULL;
 	subhierarchy=NULL;
 	n=1;
-	ifs.homedir=NULL;
-	ifs.maildir=NULL;
 
 	while (folder[n])
 	{
@@ -610,12 +558,8 @@ int maildir_info_smap_find(struct maildir_info *info, char **folder,
 		curcache->indexfile.startingpos=
 			curcache->records[i].offset;
 
-		if (ifs.homedir)
-			free(ifs.homedir);
-		if (ifs.maildir)
-			free(ifs.maildir);
-		ifs.homedir=NULL;
-		ifs.maildir=NULL;
+		ifs.homedir.clear();
+		ifs.maildir.clear();
 
 		rc=maildir_newshared_nextAt(&curcache->indexfile,
 					    &eof,
@@ -630,26 +574,20 @@ int maildir_info_smap_find(struct maildir_info *info, char **folder,
 			break;
 		}
 
-		if (!ifs.homedir && !ifs.maildir)
+		if (ifs.homedir.empty() && ifs.maildir.empty())
 			break;
 
-		if (!ifs.homedir)
+		if (ifs.homedir.empty())
 		{
-			if (indexfile_cpy)
-				free(indexfile_cpy);
-			indexfile=indexfile_cpy=ifs.maildir;
-			ifs.maildir=NULL;
+			indexfile_cpy=ifs.maildir;
+			indexfile=indexfile_cpy.c_str();
 			subhierarchy=curcache->records[i].name;
 			++n;
 			continue;
 		}
 
-		if (indexfile_cpy)
-			free(indexfile_cpy);
-		info->homedir=maildir_location(ifs.homedir,
-					       ifs.maildir);
-		free(ifs.homedir);
-		free(ifs.maildir);
+		info->homedir=maildir_location(ifs.homedir.c_str(),
+					       ifs.maildir.c_str());
 
 		info->maildir=NULL;
 
@@ -717,13 +655,6 @@ int maildir_info_smap_find(struct maildir_info *info, char **folder,
 		info->mailbox_type=MAILBOXTYPE_NEWSHARED;
 		return 0;
 	}
-
-	if (ifs.homedir)
-		free(ifs.homedir);
-	if (ifs.maildir)
-		free(ifs.maildir);
-	if (indexfile_cpy)
-		free(indexfile_cpy);
 
 	if (folder[n] == 0)
 	{
