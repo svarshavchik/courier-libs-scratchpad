@@ -489,22 +489,19 @@ static void p_ident_name(const char *identifier)
 	output_attrencoded(identifier);
 }
 
-static int getacl_cb(const char *identifier, const maildir_aclt *acl,
-		     void *dummy)
+static int getacl_cb(const char *identifier, const char *acl, void *dummy)
 {
 	printf("<tr><td>");
 	p_ident_name(identifier);
 	printf("</td><td>");
-	showrights(maildir_aclt_ascstr(acl));
-
-
+	showrights(acl);
 
 	printf("<span class=\"folder-acl-list-action\">&nbsp;(<a href=\"");
 	output_scriptptrget();
 	printf("&amp;form=acl&amp;editentity=");
 	output_urlencoded(identifier);
 	printf("&amp;editaccess=");
-	output_urlencoded(maildir_aclt_ascstr(acl));
+	output_urlencoded(acl);
 	printf("\">%s</a>)&nbsp;(<a href=\"", getarg("EDIT"));
 	output_scriptptrget();
 	printf("&amp;form=acl&amp;delentity=");
@@ -653,4 +650,3 @@ void getacl()
 
 	printf("</tbody></table></form>\n");
 }
-
