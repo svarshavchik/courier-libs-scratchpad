@@ -31,7 +31,7 @@ libmaildir.deps: config.status
 libmaildir_la_SOURCES=autoresponse.c autoresponse.h \
 	maildiraclt.h maildiracltcpp.C \
 	maildircache.c maildircache.h \
-	maildircreate.c maildircreate.h \
+	maildircreate.C maildircreate.h \
 	maildirfilename.c maildirgetnew.c \
 	maildirfilter.c maildirfilter2.c \
 	maildirfilter.h maildirfiltertypelist.h\
@@ -59,8 +59,13 @@ noinst_PROGRAMS=deliverquota maildirmake testmaildirfilter maildirkwtest \
 deliverquota_SOURCES=deliverquota.c
 deliverquota_DEPENDENCIES=libmaildir.la ../rfc822/librfc822.la \
 				../numlib/libnumlib.la
-deliverquota_LDADD=libmaildir.la ../rfc822/librfc822.la ../numlib/libnumlib.la
+deliverquota_LDADD=			\
+	libmaildir.la			\
+	../rfc822/librfc822.la		\
+	../numlib/libnumlib.la		\
+	-lcourier-unicode
 deliverquota_LDFLAGS=-static
+nodist_EXTRA_deliverquota_SOURCES=dummy.C
 
 maildirmake_SOURCES=maildirmake.c
 maildirmake_DEPENDENCIES=libmaildir.la \
@@ -89,6 +94,7 @@ maildirkw_LDADD=libmaildir.la ../liblock/liblock.la ../numlib/libnumlib.la
 maildirkw_DEPENDENCIES=libmaildir.la ../liblock/liblock.la \
 	../numlib/libnumlib.la
 maildirkw_LDFLAGS=-static
+nodist_EXTRA_maildirkw_SOURCES=dummy.C
 
 maildirkwtest2_SOURCES=maildirkw.C maildirkwtest2.c
 maildirkwtest2_LDADD=$(maildirkw_LDADD)
