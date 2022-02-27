@@ -2793,10 +2793,11 @@ void folder_list()
 			    do_sharedhierlist);
 }
 
-static int do_publicfolderlist_cb(struct maildir_newshared_enum_cb *cb)
+static int do_publicfolderlist_cb(struct maildir_newshared_enum_cb *cb,
+				  void *cb_arg)
 {
 	struct publicfolderlist_helper *h=
-		(struct publicfolderlist_helper *)cb->cb_arg;
+		(struct publicfolderlist_helper *)cb_arg;
 
 	h->name=strdup(cb->name);
 	if (cb->homedir)
