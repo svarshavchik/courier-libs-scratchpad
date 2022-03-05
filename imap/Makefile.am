@@ -87,7 +87,16 @@ imapd_testmockpurge_LDADD=$(imapd_LDADD)
 
 pop3login_SOURCES=pop3login.C pop3dcapa.c proxy.C proxy.h
 pop3login_DEPENDENCIES=../tcpd/libspipe.la ../tcpd/libspipe.la libpop3d.la
-pop3login_LDADD=../tcpd/libtlsclient.la ../tcpd/libspipe.la libpop3d.la ../tcpd/libspipe.la @LDAUTH@ -lcourierauth -lcourierauthsasl @NETLIBS@
+pop3login_LDADD=			\
+	../tcpd/libtlsclient.la		\
+	../tcpd/libspipe.la		\
+	libpop3d.la			\
+	../tcpd/libspipe.la		\
+	@LDAUTH@			\
+	-lcourierauth			\
+	-lcourierauthsasl		\
+	-lcourier-unicode		\
+	@NETLIBS@
 
 libpop3d_la_SOURCES=externalauth.c
 libpop3d_la_LIBADD=../maildir/libmaildir.la \
