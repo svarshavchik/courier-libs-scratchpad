@@ -3278,6 +3278,8 @@ void smap()
 							n=0;
 							perror("maildir_kwSave");
 						}
+						libmail_kwmDestroy(addKeywords);
+						addKeywords=NULL;
 					}
 
 					argvec=NULL;
