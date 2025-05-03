@@ -9,9 +9,11 @@ on:
 
 jobs:
   build-combined:
-     uses: svarshavchik/courier/.github/workflows/build-combined.yml@master
+     # uses: svarshavchik/courier/.github/workflows/build-combined.yml@master
+     uses: svarshavchik/courier-scratchpad/.github/workflows/build-combined.yml@master
      with:
-       thisrepo: svarshavchik/courier
+       # thisrepo: svarshavchik/courier
+       thisrepo: svarshavchik/courier-scratchpad
        thisbranch: master
        libsrepo: ${{ github.repository }}
        libsbranch: ${{ github.ref }}
