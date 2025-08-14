@@ -1597,6 +1597,12 @@ struct rfc2045::entity_parse_meta {
 	static constexpr size_t longunfoldedheadersize=(1024 * 10);
 };
 
+namespace rfc822 {
+
+	template<typename out_iter,
+		 typename src_type> class mime_decoder;
+}
+
 class rfc2045::entity : public entity_info {
 
  public:
@@ -1649,19 +1655,6 @@ class rfc2045::entity : public entity_info {
 		static constexpr std::string_view eol{
 			crlf ? "\r\n":"\n"
 		};
-		template<typename out_iter,
-			 typename src_type> class decoder;
-
-
-		template<typename out_iter,
-			 typename src_type>
-		decoder(out_iter &, src_type &, std::string="")
-			-> decoder<out_iter &, src_type>;
-
-		template<typename out_iter,
-			 typename src_type>
-		decoder(out_iter &&, src_type &, std::string="")
-			-> decoder<out_iter, src_type>;
 
 		template<typename src_type> static bool try_boundary(
 			src_type &&src,
@@ -1819,7 +1812,7 @@ public:
 		if (!report)
 			return false;
 
-		line_iter<false>::decoder decoder{
+		rfc822::mime_decoder decoder{
 			handler,
 			src
 		};
@@ -2961,20 +2954,19 @@ private:
 	}
 };
 
-template<bool crlf>
-template<typename out_iter_type,
+template<typename out_iter,
 	 typename src_type>
-class rfc2045::entity::line_iter<crlf>::decoder {
+class rfc822::mime_decoder {
 
 	src_type &src;
 
-	out_iter_type out;
+	out_iter out;
 	std::string charset;
 
  public:
 	template<typename T>
-	decoder(T &&out, src_type &src,
-		std::string charset="")
+	mime_decoder(T &&out, src_type &src,
+		     std::string charset="")
 		: src{src}, out{std::forward<T>(out)},
 		  charset{std::move(charset)}
 	{
@@ -2986,20 +2978,36 @@ class rfc2045::entity::line_iter<crlf>::decoder {
 	bool header_name_lc=true;
 	bool decode_subentities=true;
 
-	void decode(const entity &e);
-	~decoder()=default;
+	template<bool crlf=false>
+	void decode(const rfc2045::entity &e);
+	~mime_decoder()=default;
 };
 
-template<bool crlf>
+namespace rfc822 {
+	template<typename out_iter,
+		 typename src_type>
+	mime_decoder(out_iter &, src_type &, std::string="")
+		-> mime_decoder<out_iter &, src_type>;
+
+	template<typename out_iter,
+		 typename src_type>
+	mime_decoder(out_iter &&, src_type &, std::string="")
+		-> mime_decoder<out_iter, src_type>;
+}
+
 template<typename out_iter,
 	 typename src_type>
-void rfc2045::entity::line_iter<crlf>::decoder<out_iter, src_type>::decode(
-	const entity &e
+template<bool crlf>
+void rfc822::mime_decoder<out_iter, src_type>::decode(
+	const rfc2045::entity &e
 )
 {
+	auto &eol=rfc2045::entity::line_iter<crlf>::eol;
+
 	if (decode_header)
 	{
-		headers parser{e, src};
+		typename rfc2045::entity::line_iter<crlf>::headers<
+			src_type> parser{e, src	};
 
 		parser.name_lc=header_name_lc;
 		std::string header;
@@ -3019,11 +3027,7 @@ void rfc2045::entity::line_iter<crlf>::decoder<out_iter, src_type>::decode(
 			rfc822::display_header(name, content, charset,
 					       std::back_inserter(header));
 
-			if constexpr (crlf)
-			{
-				header.push_back('\r');
-			}
-			header.push_back('\n');
+			header += eol;
 			out(header.data(), header.size());
 		} while (parser.next());
 
@@ -3033,7 +3037,7 @@ void rfc2045::entity::line_iter<crlf>::decoder<out_iter, src_type>::decode(
 			{
 				for (auto &subentity:e.subentities)
 				{
-					decode(subentity);
+					decode<crlf>(subentity);
 				}
 			}
 			return;
@@ -3229,7 +3233,7 @@ bool rfc2045::entity::line_iter<crlf>::try_boundary(
 
 		};
 
-	decoder do_decoder{closure, src};
+	rfc822::mime_decoder do_decoder{closure, src};
 
 	do_decoder.decode_header=true;
 	do_decoder.decode(e);
@@ -3406,7 +3410,7 @@ void rfc2045::entity::line_iter<crlf>
 }
 
 #define rfc2045_rfc2045_h_included 1
-#include "rfc2045_encode.h"
+#include "rfc2045/rfc2045_encode.h"
 
 #endif
 
