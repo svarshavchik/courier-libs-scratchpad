@@ -99,7 +99,7 @@ extern void fetchflags(unsigned long);
 extern void fetchflags_byuid(unsigned long);
 extern int do_fetch(unsigned long, int, const std::list<fetchinfo> &);
 extern unsigned long header_count, body_count;
-extern void fetch_free_cached();
+extern void fetch_free_cached(), fetch_free_cachedentity();
 extern void imapscanfail(const char *p);
 extern void mainloop();
 extern void bye_msg(const char *);
@@ -5858,6 +5858,7 @@ int main(int argc, char **argv)
 	chkdisabled(ip, port);
 	mainloop();
 	fetch_free_cached();
+	fetch_free_cachedentity();
 	bye();
 	return (0);
 }

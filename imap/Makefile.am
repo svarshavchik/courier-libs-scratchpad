@@ -27,7 +27,8 @@ EXTRA_DIST=testsuite testsuite.txt smaptestsuite smaptestsuite.txt \
 	pop3testsuite pop3testsuite.txt
 
 noinst_SCRIPTS=mkimapdcert mkpop3dcert mkdhparams
-noinst_PROGRAMS=imaplogin imapd imapd.testmockpurge pop3login pop3d \
+noinst_PROGRAMS=imaplogin imapd imapd.testaltfetch \
+	imapd.testmockpurge pop3login pop3d \
 	pop3d.testmock
 
 noinst_DATA=imapd.8 imapd.html imapd.cnf pop3d.cnf \
@@ -67,7 +68,7 @@ imaplogin_DEPENDENCIES=libimapd.la libimaplogin.la
 imaplogin_LDADD=libimapd.la libimaplogin.la \
 	@LDAUTH@ -lcourierauth -lcourierauthsasl
 
-imapd_SOURCES=fetch.C fetchinfo.C fetchinfo.h imapd.C imapd.h \
+imapd_common_sources=fetchinfo.C fetchinfo.h imapd.C imapd.h \
 	imapscanclient.C imapscanclient.h \
 	mailboxlist.C mailboxlist.h \
 	msgbodystructure.C msgenvelope.C \
@@ -77,6 +78,7 @@ imapd_SOURCES=fetch.C fetchinfo.C fetchinfo.h imapd.C imapd.h \
 	search.C searchinfo.C searchinfo.h \
 	storeinfo.C storeinfo.h
 
+imapd_SOURCES=fetch.C $(imapd_common_sources)
 imapd_DEPENDENCIES=libimapd.la @dblibrary@
 
 imapd_LDADD=libimapd.la	@dblibrary@ @DEBUGLIB@ @LDAUTH@ -lcourierauth
@@ -84,6 +86,10 @@ imapd_LDADD=libimapd.la	@dblibrary@ @DEBUGLIB@ @LDAUTH@ -lcourierauth
 imapd_testmockpurge_SOURCES=$(imapd_SOURCES) mockmaildirpurge.c
 imapd_testmockpurge_DEPENDENCIES=$(imapd_DEPENDENCIES)
 imapd_testmockpurge_LDADD=$(imapd_LDADD)
+
+imapd_testaltfetch_SOURCES=altfetch.C $(imapd_common_sources)
+imapd_testaltfetch_DEPENDENCIES=$(imapd_DEPENDENCIES)
+imapd_testaltfetch_LDADD=$(imapd_LDADD)
 
 pop3login_SOURCES=pop3login.C pop3dcapa.C proxy.C proxy.h
 pop3login_DEPENDENCIES=../tcpd/libspipe.la ../tcpd/libspipe.la libpop3d.la
@@ -226,9 +232,17 @@ check-am:
 	@test "@MAKECHECKBROKEN@" = "Y" || exit 0; echo "" ; echo "Error: --with-trashquota or the --enable-workarounds-for-imap-client-bugs" ; echo "option was specified to the configure script."; echo ""; echo "As INSTALL told you, make check fails if these options are used, and I wasn't"; echo "kidding when I wrote it.  Reconfigure and rebuild without these options, then"; echo "rerun make and make check.  If make check passes, reconfigure again with your"; echo "original options, and proceed with installing this server.  Have fun!"; exit 1
 	@rm -f conftest1
 	@chmod +x testsuitefix.pl
+	unset IMAPINVOKE; \
 	unset IMAP_USELOCKS; LC_ALL=C; export LC_ALL; $(srcdir)/testsuite | ./testsuitefix.pl | sort | diff -U 3 $(srcdir)/testsuite.txt -
+	unset IMAPINVOKE; \
 	IMAP_USELOCKS=1; export IMAP_USELOCKS; LC_ALL=C; export LC_ALL; $(srcdir)/testsuite | ./testsuitefix.pl | sort | diff -U 3 $(srcdir)/testsuite.txt -
+	IMAPINVOKE=./imapd.testaltfetch; export IMAPINVOKE; \
+	unset IMAP_USELOCKS; LC_ALL=C; export LC_ALL; $(srcdir)/testsuite | ./testsuitefix.pl | sort | diff -U 3 $(srcdir)/testsuite.txt -
+	IMAPINVOKE=./imapd.testaltfetch; export IMAPINVOKE; \
+	IMAP_USELOCKS=1; export IMAP_USELOCKS; LC_ALL=C; export LC_ALL; $(srcdir)/testsuite | ./testsuitefix.pl | sort | diff -U 3 $(srcdir)/testsuite.txt -
+	unset IMAPINVOKE; \
 	unset IMAP_USELOCKS; LC_ALL=C; export LC_ALL; test "@smap@" = "yes" || exit 0; export PERL=@PERL@; @SHELL@ $(srcdir)/smaptestsuite | ./testsuitefix.pl | sort | diff -U 3 $(srcdir)/smaptestsuite.txt -
+	unset IMAPINVOKE; \
 	IMAP_USELOCKS=1; export IMAP_USELOCKS; LC_ALL=C; export LC_ALL; test "@smap@" = "yes" || exit 0; export PERL=@PERL@; @SHELL@ $(srcdir)/smaptestsuite | ./testsuitefix.pl | sort | diff -U 3 $(srcdir)/smaptestsuite.txt -
 	VALGRIND="`which valgrind 2>/dev/null`"; test "$$VALGRIND" != "" || exit 0; \
 		IMAP_USELOCKS=1; export IMAP_USELOCKS; \
@@ -242,6 +256,12 @@ check-am:
 		rm -f confmdmemleak; \
 		IMAPINVOKE='@SHELL@ $(srcdir)/testsuitevalgrind ./imapd'; export IMAPINVOKE; \
 		export PERL=@PERL@; @SHELL@ -x $(srcdir)/smaptestsuite 2>&1 | tee confmderror.txt; test -f confmdmemleak || exit 0; exit 1
+	VALGRIND="`which valgrind 2>/dev/null`"; test "$$VALGRIND" != "" || exit 0; \
+		IMAP_USELOCKS=1; export IMAP_USELOCKS; \
+		LC_ALL=C; export LC_ALL; \
+		rm -f confmdmemleak; \
+		IMAPINVOKE='@SHELL@ $(srcdir)/testsuitevalgrind ./imapd.testaltfetch'; export IMAPINVOKE; \
+		@SHELL@ -x $(srcdir)/testsuite 2>&1 | tee confmderror.txt; test -f confmdmemleak || exit 0; exit 1
 	rm -f confmderror.txt
 	rm -rf confmdtest
 	@SHELL@ $(srcdir)/pop3testsuite | sed 's/^--=_.*/--mimeboundary/;s/ENOMEM.*/ENOMEM/;s/boundary=.*/boundary=/' | diff -U 3 $(srcdir)/pop3testsuite.txt -

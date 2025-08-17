@@ -62,6 +62,8 @@
 #include	<vector>
 #include	<list>
 #include	<algorithm>
+#include	<tuple>
+#include	<fstream>
 
 #define SMAP_BUFSIZ 8192
 
@@ -97,9 +99,6 @@ extern std::string compute_myrights(maildir::aclt_list &l,
 struct addRemoveKeywordInfo;
 
 void snapshot_select(int);
-extern void doflags(FILE *fp, struct fetchinfo *fi,
-		    imapscaninfo *i, unsigned long msgnum,
-		    struct rfc2045 *mimep);
 extern void set_time(const std::string &tmpname, time_t timestamp);
 extern void imapenhancedidle(void);
 
@@ -125,8 +124,9 @@ extern bool acl_lock(const std::string &maildir,
 
 extern void aclminimum(const std::string &);
 
-struct rfc2045 *fetch_alloc_rfc2045(unsigned long, FILE *);
-FILE *open_cached_fp(unsigned long);
+rfc2045::entity *fetch_alloc_rfc2045(unsigned long msgnum,
+				     rfc822::fdstreambuf &);
+rfc822::fdstreambuf &open_cached_fp(unsigned long);
 void fetch_free_cache();
 
 FILE *maildir_mkfilename(const char *mailbox, struct imapflags *flags,
@@ -1211,50 +1211,75 @@ static int hashdr(const char *hdrList, const char *hdr)
 	return 0;
 }
 
-static void writemimeid(struct rfc2045 *rfcp)
+static void writemimeid(rfc2045::entity *rfcp)
 {
-	if (rfcp->parent)
+	if (rfcp->parent_entity)
 	{
-		writemimeid(rfcp->parent);
+		auto parent=rfcp->parent_entity;
+		writemimeid(parent);
 		writes(".");
+
+		size_t n=rfcp - parent->subentities.data();
+
+		if (!rfc2045_message_content_type(
+			    parent->content_type.value.c_str()
+		    ))
+		{
+			++n;
+		}
+		writen(n);
+		return;
 	}
-	writen(rfcp->pindex);
+	writen(1);
 }
 
-static int dump_hdrs(int fd, unsigned long n,
-		     struct rfc2045 *rfcp, const char *hdrs,
+static int dump_hdrs(rfc822::fdstreambuf &src, unsigned long n,
+		     rfc2045::entity *message, const char *hdrs,
+		     rfc2045::headers_base &h,
+		     const char *type,
+		     size_t hdrsize);
+
+static int dump_hdrs(rfc822::fdstreambuf &src, unsigned long n,
+		     rfc2045::entity *message, const char *hdrs,
 		     const char *type)
 {
-	struct rfc2045src *src;
-	struct rfc2045headerinfo *h;
-	char *header;
-	char *value;
-	int rc;
-        off_t start_pos, end_pos, dummy, start_body;
-	off_t nbodylines;
-	int get_flags=RFC2045H_NOLC;
-
-	rc=0;
+	bool keep_eol=false;
 
 	if (type && strcmp(type, "RAWHEADERS") == 0)
-		get_flags |= RFC2045H_KEEPNL;
+		keep_eol=true;
 
-	if (!rfcp)
+	if (message)
 	{
-		struct stat stat_buf;
+		rfc2045::entity::line_iter<false>::headers h{*message, src};
 
-		if (fstat(fd, &stat_buf))
-			end_pos=8000; /* Heh */
-		else
-			end_pos=stat_buf.st_size;
-		start_pos=0;
-		start_body=0;
+		h.name_lc=false;
+		h.keep_eol=keep_eol;
+		dump_hdrs(src, n, message, hdrs, h, type,
+			  message->startbody - message->startpos);
 	}
-	else rfc2045_mimepos(rfcp, &start_pos, &end_pos, &start_body, &dummy,
-			     &nbodylines);
+	else
+	{
+		src.pubseekpos(0);
+		rfc2045::entity::line_iter<false>::headers h{src};
+
+		h.name_lc=false;
+		h.keep_eol=keep_eol;
+		dump_hdrs(src, n, message, hdrs, h, type, 0);
+	}
+
+	return src.fileno() < 0 ? -1:0;
+}
+
+static int dump_hdrs(rfc822::fdstreambuf &src, unsigned long n,
+		     rfc2045::entity *message, const char *hdrs,
+		     rfc2045::headers_base &h,
+		     const char *type,
+		     size_t hdrsize)
+{
+	int rc=0;
 
 	writes("{.");
-	writen(start_body - start_pos);
+	writen(hdrsize);
 	writes("} FETCH ");
 	writen(n+1);
 	if (type)
@@ -1266,134 +1291,113 @@ static int dump_hdrs(int fd, unsigned long n,
 	else	/* MIME */
 	{
 		writes(" LINES=");
-		writen(nbodylines);
+		writen(message->nbodylines);
 		writes(" SIZE=");
-		writen(end_pos-start_body);
+		writen(message->endbody-message->startbody);
 		writes(" \"MIME.ID=");
 
-		if (rfcp->parent)
+		if (message && message->parent_entity)
 		{
-			writemimeid(rfcp);
+			writemimeid(message);
 			writes("\" \"MIME.PARENT=");
-			if (rfcp->parent->parent)
-				writemimeid(rfcp->parent);
+			if (message->parent_entity->parent_entity)
+				writemimeid(message->parent_entity);
 		}
 		writes("\"\n");
 	}
 
-	src=rfc2045src_init_fd(fd);
-	h=src ? rfc2045header_start(src, rfcp):NULL;
-
-	while (h &&
-	       (rc=rfc2045header_get(h, &header, &value, get_flags)) == 0
-	       && header)
+	do
 	{
-		if (hashdr(hdrs, header))
-		{
-			if (*header == '.')
-				writes(".");
-			writes(header);
-			writes(": ");
-			writes(value);
-			writes("\n");
+		const auto &[name, empty]=h.convert_name_check_empty();
 
-			header_count += strlen(header)+strlen(value)+3;
+		if (!empty && hashdr(hdrs, name.c_str()))
+		{
+			if (*name.c_str() == '.')
+				writes(".");
+
+			auto header=h.current_header();
+			if (header.size() > 0)
+			{
+				writemem(header.data(), header.size());
+				if (header.back() != '\n')
+					writes("\n");
+			}
 		}
-	}
+	} while (h.next());
 	writes(".\n");
 
-	if (h)
-		rfc2045header_end(h);
-	else
+	if (src.fileno() < 0)
 		rc= -1;
-	if (src)
-		rfc2045src_deinit(src);
 	return rc;
 }
 
-static int dump_body(FILE *fp, unsigned long msgNum,
-		     struct rfc2045 *rfcp, int dump_all)
+static int dump_body(rfc822::fdstreambuf &src, unsigned long msgNum,
+		     rfc2045::entity *message, bool dump_all)
 {
 	char buffer[SMAP_BUFSIZ];
-        off_t start_pos, end_pos, dummy, start_body;
-	int i;
-	int first;
+        size_t left;
+	bool first;
 
-	if (!rfcp)
+	if (!message)
 	{
+		src.pubseekpos(0);
+
 		struct stat stat_buf;
 
-		if (fstat(fileno(fp), &stat_buf) < 0)
+		if (src.fileno() < 0 || fstat(src.fileno(), &stat_buf) < 0)
 			return -1;
 
-		if (dump_all)
-		{
-			start_pos=start_body=0;
-		}
-		else
-		{
-			if (fseek(fp, 0L, SEEK_SET) < 0)
-				return -1;
+		left=stat_buf.st_size;
 
-			if (!(rfcp=rfc2045_alloc()))
-				return -1;
+		if (!dump_all)
+		{
+			std::string hdr;
 
-			do
+			std::istream i{&src};
+
+			while (std::getline(i, hdr))
 			{
-				i=fread(buffer, 1, sizeof(buffer), fp);
-
-				if (i < 0)
-				{
-					rfc2045_free(rfcp);
-					return -1;
-				}
-
-				if (i == 0)
+				if (hdr.empty())
 					break;
-				rfc2045_parse(rfcp, buffer, i);
-			} while (rfcp->workinheader);
+			}
 
-			rfc2045_mimepos(rfcp, &start_pos, &end_pos,
-					&start_body, &dummy,
-					&dummy);
-			rfc2045_free(rfcp);
+			auto pos=src.pubseekoff(0, std::ios_base::cur);
 
-			start_pos=0;
+			if (pos == static_cast<
+			    rfc822::fdstreambuf::pos_type
+			    >(static_cast<
+			      rfc822::fdstreambuf::off_type
+			      >(-1)))
+				return -1;
+
+			left -= pos;
 		}
-		end_pos=stat_buf.st_size;
 	}
-	else rfc2045_mimepos(rfcp, &start_pos, &end_pos, &start_body, &dummy,
-			     &dummy);
-
-	if (dump_all)
-		start_body=start_pos;
-
-	if (fseek(fp, start_body, SEEK_SET) < 0)
-		return -1;
-
-	first=1;
+	else
+	{
+		src.pubseekpos(dump_all ? message->startpos:message->startbody);
+		left=message->endbody - (dump_all ? message->startpos
+					 : message->startbody);
+	}
+	first=true;
 	do
 	{
-		int n=sizeof(buffer);
+		size_t n=sizeof(buffer);
 
-		if (n > end_pos - start_body)
-			n=end_pos - start_body;
+		if (n > left)
+			n=left;
 
-		for (i=0; i<n; i++)
+		size_t i=src.sgetn(buffer, n);
+
+		if (i != n)
 		{
-			int ch=getc(fp);
-
-			if (ch == EOF)
-			{
-				errno=EIO;
-				return -1;
-			}
-			buffer[i]=ch;
+			errno=EIO;
+			return -1;
 		}
 
 		if (first)
 		{
-			if (start_body == end_pos)
+			if (left == 0)
 			{
 				writes("{.0} FETCH ");
 				writen(msgNum+1);
@@ -1404,7 +1408,7 @@ static int dump_body(FILE *fp, unsigned long msgNum,
 				writes("{");
 				writen(i);
 				writes("/");
-				writen(end_pos - start_body);
+				writen(left);
 				writes("} FETCH ");
 				writen(msgNum+1);
 				writes(" CONTENTS\n");
@@ -1419,208 +1423,96 @@ static int dump_body(FILE *fp, unsigned long msgNum,
 		first=0;
 		writemem(buffer, i);
 
-		start_body += i;
-		body_count += i;
-	} while (start_body < end_pos);
+		left -= i;
+	} while (left > 0);
 	writes("\n");
 	return 0;
 }
 
-struct decodeinfo {
-	char buffer[SMAP_BUFSIZ];
-	size_t bufptr;
-
-	int first;
-	unsigned long msgNum;
-	off_t estSize;
-};
-
-static void do_dump_decoded_flush(struct decodeinfo *);
-
-static struct rfc2045 *decodeCreateRfc(FILE *fp);
-static int do_dump_decoded(const char *, size_t, void *);
-
-static int dump_decoded(FILE *fp, unsigned long msgNum,
-			struct rfc2045 *rfcp)
+static int dump_decoded(rfc822::fdstreambuf &src, unsigned long msgNum,
+			rfc2045::entity &message)
 {
-	struct decodeinfo myDecodeInfo;
-	const char *content_type;
-	const char *content_transfer_encoding;
-	const char *charset;
-        off_t start_pos, end_pos, dummy, start_body;
+	size_t estsize=message.endbody-message.startbody;
 
-	struct rfc2045src *src;
-	struct rfc2045 *myrfcp=NULL;
-	int fd;
-	int i;
-
-	if (!rfcp)
+	if (message.content_transfer_encoding == rfc2045::cte::base64)
 	{
-		rfcp=myrfcp=decodeCreateRfc(fp);
-		if (!rfcp)
-			return -1;
+		estsize = estsize/4*3;
 	}
 
-	if ((fd=dup(fileno(fp))) < 0)
+	char buf[BUFSIZ];
+	size_t bufsiz=0;
+
+	bool flushed=false;
+
+	auto flush=[&]
 	{
-		if (myrfcp)
-			rfc2045_free(myrfcp);
-		return -1;
-	}
+		if (!flushed)
+		{
+			writes("{");
+			writen(bufsiz);
+			writes("/");
+			writen(estsize);
+			writes("} FETCH ");
+			writen(msgNum+1);
+			writes(" CONTENTS\n");
+			flushed=true;
+		}
+		else
+		{
 
-	myDecodeInfo.first=1;
-	myDecodeInfo.msgNum=msgNum;
-	myDecodeInfo.bufptr=0;
+			writen(bufsiz);
+			writes("\n");
+		}
+		writemem(buf, bufsiz);
+		bufsiz=0;
+	};
 
-	rfc2045_mimeinfo(rfcp, &content_type, &content_transfer_encoding,
-			 &charset);
-	rfc2045_mimepos(rfcp, &start_pos, &end_pos, &start_body, &dummy,
-			&dummy);
-	myDecodeInfo.estSize=end_pos - start_body;
+	rfc822::mime_decoder decoder(
+		[&]
+		(const char *ptr, size_t n)
+		{
+			while (n)
+			{
+				if (bufsiz == sizeof(buf))
+					flush();
 
-	if (content_transfer_encoding
-	    && strlen(content_transfer_encoding) == 6)
-	{
-		char buf[7];
+				buf[bufsiz++]=*ptr++;
+				--n;
+			}
+		}, src);
 
-		strcpy(buf, content_transfer_encoding);
-		up(buf);
+	decoder.decode_header=false;
+	decoder.add_eol=false;
+	decoder.decode(message);
 
-		if (strcmp(buf, "BASE64") == 0)
-			myDecodeInfo.estSize = myDecodeInfo.estSize / 4 * 3;
+	if (bufsiz)
+		flush();
 
-		/* Better estimate of base64 content */
-	}
-
-	src=rfc2045src_init_fd(fd);
-
-	i=src ? rfc2045_decodemimesection(src, rfcp, &do_dump_decoded,
-					  &myDecodeInfo):-1;
-
-	do_dump_decoded_flush(&myDecodeInfo);
-
-	if (src)
-		rfc2045src_deinit(src);
-
-	close(fd);
-
-	if (i == 0 && myDecodeInfo.first) /* Empty body, punt */
+	if (!flushed)
 	{
 		writes("{.0} FETCH ");
 		writen(msgNum+1);
 		writes(" CONTENTS\n.");
 	}
 	writes("\n");
-	if (myrfcp)
-		rfc2045_free(myrfcp);
-	return i;
+
+	return src.fileno() < 0 ? -1:0;
 }
 
-/* Dummy up a rfc2045 structure for retrieving the entire msg body */
-
-static struct rfc2045 *decodeCreateRfc(FILE *fp)
+static int mime(rfc822::fdstreambuf &src, unsigned long n,
+		rfc2045::entity *rfcp, const char *hdrs)
 {
-	char buffer[SMAP_BUFSIZ];
-	struct stat stat_buf;
-	int i;
-	struct rfc2045 *myrfcp;
-
-	if (fstat(fileno(fp), &stat_buf) < 0)
-		return NULL;
-
-	if (fseek(fp, 0L, SEEK_SET) < 0)
-		return NULL;
-
-	if (!(myrfcp=rfc2045_alloc()))
-		return NULL;
-
-	do
-	{
-		i=fread(buffer, 1, sizeof(buffer), fp);
-
-		if (i < 0)
-		{
-			rfc2045_free(myrfcp);
-			return NULL;
-			}
-
-		if (i == 0)
-			break;
-		rfc2045_parse(myrfcp, buffer, i);
-	} while (myrfcp->workinheader);
-
-	myrfcp->endpos=stat_buf.st_size;
-	return myrfcp;
-}
-
-static int do_dump_decoded(const char *chunk, size_t chunkSize,
-			   void *vp)
-{
-	struct decodeinfo *myDecodeInfo=(struct decodeinfo *) vp;
-
-	while (chunkSize)
-	{
-		size_t n;
-
-		if (myDecodeInfo->bufptr >= sizeof(myDecodeInfo->buffer))
-			do_dump_decoded_flush(myDecodeInfo);
-
-		n=sizeof(myDecodeInfo->buffer)-myDecodeInfo->bufptr;
-
-		if (n > chunkSize)
-			n=chunkSize;
-		memcpy(myDecodeInfo->buffer + myDecodeInfo->bufptr, chunk, n);
-		myDecodeInfo->bufptr += n;
-		chunk += n;
-		chunkSize -= n;
-	}
-	return 0;
-}
-
-static void do_dump_decoded_flush(struct decodeinfo *myDecodeInfo)
-{
-	size_t chunkSize= myDecodeInfo->bufptr;
-
-	myDecodeInfo->bufptr=0;
-
-	if (chunkSize == 0)
-		return;
-
-	if (myDecodeInfo->first)
-	{
-		myDecodeInfo->first=0;
-		writes("{");
-		writen(chunkSize);
-		writes("/");
-		writen(myDecodeInfo->estSize);
-		writes("} FETCH ");
-		writen(myDecodeInfo->msgNum+1);
-		writes(" CONTENTS\n");
-	}
-	else
-	{
-		writen(chunkSize);
-		writes("\n");
-	}
-	writemem(myDecodeInfo->buffer, chunkSize);
-	body_count += chunkSize;
-}
-
-static int mime(int fd, unsigned long n,
-		struct rfc2045 *rfcp, const char *hdrs)
-{
-	int rc=dump_hdrs(fd, n, rfcp, hdrs, NULL);
+	int rc=dump_hdrs(src, n, rfcp, hdrs, NULL);
 
 	if (rc)
 		return rc;
 
-	for (rfcp=rfcp->firstpart; rfcp; rfcp=rfcp->next)
-		if (!rfcp->isdummy)
-		{
-			rc=mime(fd, n, rfcp, hdrs);
-			if (rc)
-				return rc;
-		}
+	for (auto &subentity:rfcp->subentities)
+	{
+		rc=mime(src, n, &subentity, hdrs);
+		if (rc)
+			return rc;
+	}
 
 	return 0;
 }
@@ -1629,10 +1521,14 @@ static int mime(int fd, unsigned long n,
 ** Find the specified MIME id.
 */
 
-static struct rfc2045 *findmimeid(struct rfc2045 *rfcp,
-				  const char *mimeid)
+static rfc2045::entity *findmimeid(rfc2045::entity *rfcp,
+				   const char *mimeid)
 {
 	unsigned long n;
+
+	std::optional<int> ismsgrfc822;
+
+	ismsgrfc822=1;
 
 	while (mimeid && *mimeid)
 	{
@@ -1647,20 +1543,43 @@ static struct rfc2045 *findmimeid(struct rfc2045 *rfcp,
 			mimeid++;
 		}
 
-		while (rfcp)
+		if (ismsgrfc822)
 		{
-			if (!rfcp->isdummy && rfcp->pindex == n)
-				break;
-			rfcp=rfcp->next;
+			if (*ismsgrfc822) // Top level
+			{
+				if (n != 1)
+					return nullptr;
+			}
+			else
+			{
+				++n; // Should be given as 0
+				ismsgrfc822.reset();
+			}
 		}
 
-		if (!rfcp)
-			return NULL;
+		if (ismsgrfc822)
+		{
+			ismsgrfc822.reset();
+		}
+		else
+		{
+			rfcp=n >= 1 && n <= rfcp->subentities.size()
+				? &rfcp->subentities[n-1]:nullptr;
+
+			if (!rfcp)
+				return NULL;
+
+			if (rfc2045_message_content_type(
+				    rfcp->content_type.value.c_str()
+			    ))
+			{
+				ismsgrfc822=0;
+			}
+		}
 
 		if (*mimeid == '.')
 		{
 			++mimeid;
-			rfcp=rfcp->firstpart;
 		}
 	}
 	return rfcp;
@@ -1668,66 +1587,50 @@ static struct rfc2045 *findmimeid(struct rfc2045 *rfcp,
 
 static int do_fetch(unsigned long n, smapfetchinfo &fi)
 {
-	FILE *fp=open_cached_fp(n);
+	auto &src=open_cached_fp(n);
 	int rc=0;
-
-	if (!fp)
-		return -1;
 
 	if (strcmp(fi.entity, "MIME") == 0)
 	{
-		struct rfc2045 *rfcp=fetch_alloc_rfc2045(n, fp);
-		int fd;
+		rfc2045::entity *rfcp=fetch_alloc_rfc2045(n, src);
 
 		if (!rfcp)
 			return -1;
 
-		fd=dup(fileno(fp));
-		if (fd < 0)
-			return -1;
-
-		rc=mime(fd, n, rfcp, fi.hdrs);
-		close(fd);
+		rc=mime(src, n, rfcp, fi.hdrs);
 	}
 	else if (strcmp(fi.entity, "HEADERS") == 0 ||
 		 strcmp(fi.entity, "RAWHEADERS") == 0)
 	{
-		int fd;
-		struct rfc2045 *rfcp;
-
-		fd=dup(fileno(fp));
-		if (fd < 0)
-			return -1;
+		rfc2045::entity *rfcp;
 
 		if (!fi.mimeid || !*fi.mimeid)
 			rfcp=NULL;
 		else
 		{
-			rfcp=fetch_alloc_rfc2045(n, fp);
+			rfcp=fetch_alloc_rfc2045(n, src);
 
 			rfcp=findmimeid(rfcp, fi.mimeid);
 
 			if (!rfcp)
 			{
-				close(fd);
 				errno=EINVAL;
 				return -1;
 			}
 		}
 
-		rc=dump_hdrs(fd, n, rfcp, fi.hdrs, fi.entity);
-		close(fd);
+		rc=dump_hdrs(src, n, rfcp, fi.hdrs, fi.entity);
 	}
 	else if (strcmp(fi.entity, "BODY") == 0
 		 || strcmp(fi.entity, "ALL") == 0)
 	{
-		struct rfc2045 *rfcp;
+		rfc2045::entity *rfcp;
 
 		if (!fi.mimeid || !*fi.mimeid)
 			rfcp=NULL;
 		else
 		{
-			rfcp=fetch_alloc_rfc2045(n, fp);
+			rfcp=fetch_alloc_rfc2045(n, src);
 
 			rfcp=findmimeid(rfcp, fi.mimeid);
 
@@ -1738,28 +1641,23 @@ static int do_fetch(unsigned long n, smapfetchinfo &fi)
 			}
 		}
 
-		rc=dump_body(fp, n, rfcp, fi.entity[0] == 'A');
+		rc=dump_body(src, n, rfcp, fi.entity[0] == 'A');
 	}
 	else if (strcmp(fi.entity, "BODY.DECODED") == 0)
 	{
-		struct rfc2045 *rfcp;
+		rfc2045::entity *message;
 
-		if (!fi.mimeid || !*fi.mimeid)
-			rfcp=NULL;
-		else
+		message=fetch_alloc_rfc2045(n, src);
+
+		message=findmimeid(message, fi.mimeid);
+
+		if (!message)
 		{
-			rfcp=fetch_alloc_rfc2045(n, fp);
-
-			rfcp=findmimeid(rfcp, fi.mimeid);
-
-			if (!rfcp)
-			{
-				errno=EINVAL;
-				return -1;
-			}
+			errno=EINVAL;
+			return -1;
 		}
 
-		rc=dump_decoded(fp, n, rfcp);
+		rc=dump_decoded(src, n, *message);
 	}
 	else
 	{
@@ -1776,7 +1674,7 @@ static int do_fetch(unsigned long n, smapfetchinfo &fi)
 		{
 			flags.seen=1;
 			reflag_filename(&current_maildir_info.msgs[n],
-					&flags, fileno(fp));
+					&flags, src.fileno());
 			current_maildir_info.msgs[n].changedflags=1;
 		}
 	}
@@ -1855,10 +1753,11 @@ static void do_attrfetch(unsigned long n, int items)
 
 		if (!maildir::parsequota(p, cnt))
 		{
-			FILE *fp=open_cached_fp(n);
+			auto &src=open_cached_fp(n);
 			struct stat stat_buf;
 
-			if (fp && fstat(fileno(fp), &stat_buf) == 0)
+			if (src.fileno() >= 0 &&
+			    fstat(src.fileno(), &stat_buf) == 0)
 				cnt=stat_buf.st_size;
 			else
 				cnt=0;
@@ -1871,9 +1770,10 @@ static void do_attrfetch(unsigned long n, int items)
 	if (items & FETCH_INTERNALDATE)
 	{
 		struct stat stat_buf;
-		FILE *fp=open_cached_fp(n);
+		auto &src=open_cached_fp(n);
 
-		if (fp && fstat(fileno(fp), &stat_buf) == 0)
+		if (src.fileno() >= 0 &&
+		    fstat(src.fileno(), &stat_buf) == 0)
 		{
 			char buf[256];
 
