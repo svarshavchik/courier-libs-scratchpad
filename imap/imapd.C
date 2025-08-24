@@ -17,22 +17,6 @@
 #if	HAVE_UNISTD_H
 #include	<unistd.h>
 #endif
-#if HAVE_DIRENT_H
-#include <dirent.h>
-#define NAMLEN(dirent) strlen((dirent)->d_name)
-#else
-#define dirent direct
-#define NAMLEN(dirent) (dirent)->d_namlen
-#if HAVE_SYS_NDIR_H
-#include <sys/ndir.h>
-#endif
-#if HAVE_SYS_DIR_H
-#include <sys/dir.h>
-#endif
-#if HAVE_NDIR_H
-#include <ndir.h>
-#endif
-#endif
 #if	HAVE_UTIME_H
 #include	<utime.h>
 #endif
@@ -777,7 +761,6 @@ static std::optional<std::tuple<unsigned long, unsigned long>> store_mailbox(
 	int	lastnl;
 	int     rb;
 	int	errflag;
-	struct rfc2045 *rfc2045_parser;
 	const char *errmsg=nowrite;
 
 	fp=maildir_mkfilename(mailbox, flags, 0, tmpname, newname);
@@ -793,7 +776,7 @@ static std::optional<std::tuple<unsigned long, unsigned long>> store_mailbox(
 	writeflush();
 	lastnl=0;
 
-	rfc2045_parser=rfc2045_alloc();
+	rfc2045::entity_parser<false> parser;
 
 	while (nbytes)
 	{
@@ -811,12 +794,12 @@ static std::optional<std::tuple<unsigned long, unsigned long>> store_mailbox(
 			}
 			else if (e)
 			{
-				rfc2045_parse(rfc2045_parser, p, e-p);
+				parser.parse(p, e);
 				rb = fwrite(p, 1, e-p, fp);
 			}
 			else
 			{
-				rfc2045_parse(rfc2045_parser, p, n);
+				parser.parse(p, p+n);
 				rb = fwrite(p, 1, n, fp);
 			}
 			n -= rb;
@@ -826,7 +809,10 @@ static std::optional<std::tuple<unsigned long, unsigned long>> store_mailbox(
 	if (!lastnl)
 	{
 		putc('\n', fp);
-		rfc2045_parse(rfc2045_parser, "\n", 1);
+
+		static constexpr char nl[]="\n";
+
+		parser.parse(nl, nl+1);
 	}
 
 	errflag=0;
@@ -839,14 +825,14 @@ static std::optional<std::tuple<unsigned long, unsigned long>> store_mailbox(
 		errflag=1;
 	}
 
-	if ((rfc2045_parser->rfcviolation & RFC2045_ERR8BITHEADER) &&
+	auto parsed_message=parser.parsed_entity();
+
+	if ((parsed_message.all_errors() & RFC2045_ERR8BITHEADER) &&
 	    curtoken->tokentype != IT_LITERAL8_STRING_START)
 	{
 		/* in order to [ALERT] the client */
 		*utf8_error=1;
 	}
-
-	rfc2045_free(rfc2045_parser);
 
 	if (errflag)
 	{
