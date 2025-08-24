@@ -81,7 +81,7 @@ imapd_common_sources=fetchinfo.C fetchinfo.h imapd.C imapd.h \
 imapd_SOURCES=fetch.C $(imapd_common_sources)
 imapd_DEPENDENCIES=libimapd.la @dblibrary@
 
-imapd_LDADD=libimapd.la	@dblibrary@ @DEBUGLIB@ @LDAUTH@ -lcourierauth
+imapd_LDADD=libimapd.la	@dblibrary@ @DEBUGLIB@ @LDAUTH@ -lcourierauth -lpthread
 
 imapd_testmockpurge_SOURCES=$(imapd_SOURCES) mockmaildirpurge.c
 imapd_testmockpurge_DEPENDENCIES=$(imapd_DEPENDENCIES)
