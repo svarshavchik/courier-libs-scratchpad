@@ -412,7 +412,7 @@ See COPYING for distribution information.
     <para>
       To use the library, <quote>#include &lt;courier-unicode.h&gt;</quote> and link
       with <literal>-lcourier-unicode</literal>.
-      The C++ compiler must have C++17 support.
+      The C++ compiler must have C++20 support.
       For C++ code, as usual, the compiler and compilation
       flags for compiling any code that uses this library must be ABI-compatible
 	too.
@@ -425,7 +425,7 @@ See COPYING for distribution information.
     <blockquote>
       <informalexample>
 	<programlisting>
-          AX_CXX_COMPILE_STDCXX_17
+          AX_CXX_COMPILE_STDCXX(20)
 	  AX_COURIER_UNICODE_VERSION
 	</programlisting>
       </informalexample>
