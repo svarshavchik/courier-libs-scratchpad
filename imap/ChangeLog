@@ -1,3 +1,7 @@
+2026-09-30  Sam Varshavchik  <mrsam@courier-mta.com>
+
+	* Fix rare testsuite failure.
+
 6.0.7
 
 2026-09-26  "Andrey V. Malyshev" <amal@krasn.ru>
